@@ -43,3 +43,47 @@ add_to_free_list(header_t *bp)
 }
 
 #define MIN_ALLOC_SIZE 4096 /* We allocate blocks in page sized chunks. */
+
+
+
+/*
+ * Find a chunk from the free list and put it in the used list.
+ */
+void *
+GC_malloc(size_t alloc_size)
+{
+    size_t num_units;
+    header_t *p, *prevp;
+
+    num_units = (alloc_size + sizeof(header_t) - 1) / sizeof(header_t) + 1;  
+    prevp = freep;
+
+    for (p = prevp->next;; prevp = p, p = p->next) {
+        if (p->size >= num_units) { /* Big enough. */
+            if (p->size == num_units) /* Exact size. */
+                prevp->next = p->next;
+            else {
+                p->size -= num_units;
+                p += p->size;
+                p->size = num_units;
+            }
+
+            freep = prevp;
+
+            /* Add to p to the used list. */
+            if (usedp == NULL)  
+                usedp = p->next = p;
+            else {
+                p->next = usedp->next;
+                usedp->next = p;
+            }
+
+            return (void *) (p + 1);
+        }
+        if (p == freep) { /* Not enough memory. */
+            p = morecore(num_units);
+            if (p == NULL) /* Request for more memory failed. */
+                return NULL;
+        }
+    }
+}
