@@ -111,3 +111,115 @@ scan_region(uintptr_t *sp, uintptr_t *end)
         } while ((bp = UNTAG(bp->next)) != usedp);
     }
 }
+
+
+/*
+ * Scan the marked blocks for references to other unmarked blocks.
+ */
+static void
+scan_heap(void)
+{
+    uintptr_t *vp;
+    header_t *bp, *up;
+
+    for (bp = UNTAG(usedp->next); bp != usedp; bp = UNTAG(bp->next)) {
+        if (!((uintptr_t)bp->next & 1))
+            continue;
+        for (vp = (uintptr_t *)(bp + 1);
+             vp < (bp + bp->size + 1);
+             vp++) {
+            uintptr_t v = *vp;
+            up = UNTAG(bp->next);
+            do {
+                if (up != bp &&
+                    up + 1 <= v &&
+                    up + 1 + up->size > v) {
+                    up->next = ((uintptr_t) up->next) | 1;
+                    break;
+                }
+            } while ((up = UNTAG(up->next)) != bp);
+        }
+    }
+}
+
+/* 
+    good shit 
+
+*/
+
+/*
+ * Find the absolute bottom of the stack and set stuff up.
+ */
+void
+GC_init(void)
+{
+    static int initted;
+    FILE *statfp;
+
+    if (initted)
+        return;
+
+    initted = 1;
+
+    statfp = fopen("/proc/self/stat", "r");
+    assert(statfp != NULL);
+    fscanf(statfp,
+           "%*d %*s %*c %*d %*d %*d %*d %*d %*u "
+           "%*lu %*lu %*lu %*lu %*lu %*lu %*ld %*ld "
+           "%*ld %*ld %*ld %*ld %*llu %*lu %*ld "
+           "%*lu %*lu %*lu %lu", &stack_bottom);
+    fclose(statfp);
+
+    usedp = NULL;
+    base.next = freep = &base;
+    base.size = 0;
+}
+
+
+/*
+ * Mark blocks of memory in use and free the ones not in use.
+ */
+void
+GC_collect(void)
+{
+    header_t *p, *prevp, *tp;
+    uintptr_t stack_top;
+    extern char end, etext; /* Provided by the linker. */
+
+    if (usedp == NULL)
+        return;
+
+    /* Scan the BSS and initialized data segments. */
+    scan_region(&etext, &end);
+
+    /* Scan the stack. */
+    asm volatile ("movl %%ebp, %0" : "=r" (stack_top));
+    scan_region(stack_top, stack_bottom);
+
+    /* Mark from the heap. */
+    scan_heap();
+
+    /* And now we collect! */
+    for (prevp = usedp, p = UNTAG(usedp->next);; prevp = p, p = UNTAG(p->next)) {
+    next_chunk:
+        if (!((unsigned int)p->next & 1)) {
+            /*
+             * The chunk hasn't been marked. Thus, it must be set free. 
+             */
+            tp = p;
+            p = UNTAG(p->next);
+            add_to_free_list(tp);
+
+            if (usedp == tp) { 
+                usedp = NULL;
+                break;
+            }
+
+            prevp->next = (uintptr_t)p | ((uintptr_t) prevp->next & 1);
+            goto next_chunk;
+        }
+        p->next = ((uintptr_t) p->next) & ~1;
+        if (p == usedp)
+            break;
+    }
+}
