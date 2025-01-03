@@ -87,3 +87,27 @@ GC_malloc(size_t alloc_size)
         }
     }
 }
+
+#define UNTAG(p) (((uintptr_t) (p)) & 0xfffffffc)
+
+/*
+ * Scan a region of memory and mark any items in the used list appropriately.
+ * Both arguments should be word aligned.
+ */
+static void
+scan_region(uintptr_t *sp, uintptr_t *end)
+{
+    header_t *bp;
+
+    for (; sp < end; sp++) {
+        uintptr_t v = *sp;
+        bp = usedp;
+        do {
+            if (bp + 1 <= v &&
+                bp + 1 + bp->size > v) {
+                    bp->next = ((uintptr_t) bp->next) | 1;
+                    break;
+            }
+        } while ((bp = UNTAG(bp->next)) != usedp);
+    }
+}
